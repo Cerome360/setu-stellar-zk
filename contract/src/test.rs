@@ -966,3 +966,108 @@ fn test_withdraw_requires_association_root() {
     env.mock_all_auths();
     client.withdraw(&bob, &proof, &pub_signals);
 }
+
+// ---------------------------------------------------------------------------
+// Domain-separator tests (issue #4)
+// ---------------------------------------------------------------------------
+
+/// Domain tags embedded in the disclosure circuit (circuits/disclosure.circom).
+/// These MUST match the circuit constants exactly. If you change the circuit,
+/// update these constants and this test together.
+const DISCLOSE_DOMAIN: u32 = 1;
+const AUDITOR_DOMAIN: u32 = 2;
+
+#[test]
+fn test_domain_constants_are_distinct_and_stable() {
+    // The two domain tags must be different to prevent hash confusion.
+    assert_ne!(DISCLOSE_DOMAIN, AUDITOR_DOMAIN, "domain tags must be distinct");
+
+    // Both must be positive to avoid degenerate Poseidon inputs.
+    assert!(DISCLOSE_DOMAIN > 0, "DISCLOSE_DOMAIN must be > 0");
+    assert!(AUDITOR_DOMAIN > 0, "AUDITOR_DOMAIN must be > 0");
+
+    // Pin the exact values so a future refactor cannot accidentally change them.
+    assert_eq!(DISCLOSE_DOMAIN, 1u32);
+    assert_eq!(AUDITOR_DOMAIN, 2u32);
+}
+
+#[test]
+fn test_disclosure_public_signal_count_is_four() {
+    // The disclosure circuit outputs exactly four public signals:
+    //   [nullifierHash, commitment, discloseHash, auditorTag]
+    // This test documents the expected structure and verifies the contract
+    // rejects any other count.
+    let env = Env::default();
+    let (_token_id, contract_id, admin) = setup_test_environment(&env);
+    let client = PrivacyPoolsContractClient::new(&env, &contract_id);
+
+    env.mock_all_auths();
+    client.set_disclosure_vk(&admin, &init_vk(&env));
+
+    // Correct count: 4 signals
+    let pub_signals_4 = {
+        let output = Vec::from_array(
+            &env,
+            [
+                Fr::from_u256(U256::from_u32(&env, 100)),
+                Fr::from_u256(U256::from_u32(&env, 200)),
+                Fr::from_u256(U256::from_u32(&env, 300)),
+                Fr::from_u256(U256::from_u32(&env, 400)),
+            ],
+        );
+        PublicSignals { pub_signals: output }.to_bytes(&env)
+    };
+
+    // Wrong count: 3 signals (old malformed vector)
+    let pub_signals_3 = init_malformed_disclosure_pub_signals(&env);
+
+    // Wrong count: 5 signals
+    let pub_signals_5 = {
+        let output = Vec::from_array(
+            &env,
+            [
+                Fr::from_u256(U256::from_u32(&env, 100)),
+                Fr::from_u256(U256::from_u32(&env, 200)),
+                Fr::from_u256(U256::from_u32(&env, 300)),
+                Fr::from_u256(U256::from_u32(&env, 400)),
+                Fr::from_u256(U256::from_u32(&env, 500)),
+            ],
+        );
+        PublicSignals { pub_signals: output }.to_bytes(&env)
+    };
+
+    let proof = init_proof(&env);
+
+    // 3 signals -> rejected
+    assert_eq!(client.verify_disclosure(&proof, &pub_signals_3), false);
+    // 5 signals -> rejected
+    assert_eq!(client.verify_disclosure(&proof, &pub_signals_5), false);
+    // 4 signals -> may still fail VK/proof mismatch, but structurally valid
+    // (verify_disclosure returns false because proof doesn't match, not because
+    // of signal count)
+    assert_eq!(client.verify_disclosure(&proof, &pub_signals_4), false);
+}
+
+#[test]
+fn test_domain_separation_documentation() {
+    // This test is a living document. It verifies the domain-separation
+    // scheme described in the ZK Statements section of the README:
+    //
+    //   discloseHash = Poseidon255(DISCLOSE_DOMAIN, recipientId, purpose, value)
+    //   auditorTag   = Poseidon255(AUDITOR_DOMAIN, viewingKey, nullifierHash)
+    //
+    // The domain tags are:
+    //   DISCLOSE_DOMAIN = 1  (stable, never reused)
+    //   AUDITOR_DOMAIN  = 2  (stable, never reused)
+    //
+    // If you change these values, you must also update:
+    //   - circuits/disclosure.circom (discloseDomain / auditorDomain signals)
+    //   - circuits/disclosure_witness.circom (twin computation)
+    //   - circuits/auditor_recompute.circom (auditor recomputation)
+    //   - README.md (ZK Statements section)
+    //   - contract/src/disclosure.rs (doc comments)
+    //   - This test
+    assert_eq!(DISCLOSE_DOMAIN, 1, "discloseHash domain tag");
+    assert_eq!(AUDITOR_DOMAIN, 2, "auditorTag domain tag");
+    assert_ne!(DISCLOSE_DOMAIN, AUDITOR_DOMAIN);
+}

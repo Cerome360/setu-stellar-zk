@@ -5,6 +5,10 @@ pragma circom 2.2.0;
 // viewingKey shared with them, and the public nullifierHash. They recompute the
 // two bound hashes and check them against the receipt's public signals [2],[3].
 // They never learn nullifier or secret.
+//
+// DOMAIN SEPARATION: mirrors disclosure.circom exactly.
+//   discloseHash = Poseidon255(1, recipientId, purpose, value)
+//   auditorTag   = Poseidon255(2, viewingKey, nullifierHash)
 
 include "poseidon255.circom";
 
@@ -18,15 +22,19 @@ template AuditorRecompute() {
     signal output discloseHash;
     signal output auditorTag;
 
-    component dh = Poseidon255(3);
-    dh.in[0] <== recipientId;
-    dh.in[1] <== purpose;
-    dh.in[2] <== value;
+    // Domain-separated discloseHash: tag 1
+    component dh = Poseidon255(4);
+    dh.in[0] <== 1;
+    dh.in[1] <== recipientId;
+    dh.in[2] <== purpose;
+    dh.in[3] <== value;
     discloseHash <== dh.out;
 
-    component at = Poseidon255(2);
-    at.in[0] <== viewingKey;
-    at.in[1] <== nullifierHash;
+    // Domain-separated auditorTag: tag 2
+    component at = Poseidon255(3);
+    at.in[0] <== 2;
+    at.in[1] <== viewingKey;
+    at.in[2] <== nullifierHash;
     auditorTag <== at.out;
 }
 

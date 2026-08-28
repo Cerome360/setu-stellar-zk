@@ -8,14 +8,6 @@
 //! corresponds to a real deposit and that the disclosed amount equals the
 //! committed value. The current testnet build treats recipient and purpose as
 //! prover-asserted context hashed into the receipt, not deposit-time facts.
-//!
-//! DOMAIN SEPARATION (issue #4):
-//!   discloseHash = Poseidon255(1, recipientId, purpose, value)
-//!   auditorTag   = Poseidon255(2, viewingKey, nullifierHash)
-//!
-//!   The domain tags (1, 2) are stable constants embedded inside the circuit.
-//!   They prevent hash confusion if future circuits or product contexts add
-//!   new Poseidon invocations over the same field elements.
 
 use soroban_sdk::{contractimpl, symbol_short, vec, Address, Bytes, BytesN, Env, Symbol, Vec};
 
@@ -59,20 +51,15 @@ impl PrivacyPoolsContract {
     /// Public signals (must match circuits/disclosure.circom order):
     ///   [nullifierHash, commitment, discloseHash, auditorTag]
     ///
-    ///   Domain separation (issue #4):
-    ///   - discloseHash uses domain tag 1: Poseidon255(1, recipientId, purpose, value)
-    ///   - auditorTag uses domain tag 2: Poseidon255(2, viewingKey, nullifierHash)
-    ///
     /// Returns true iff, trustlessly:
     ///   1. `nullifierHash` is an already-spent withdrawal in THIS pool, and
     ///   2. `commitment` is a real deposit leaf in THIS pool, and
     ///   3. the Groth16 receipt proof verifies under the disclosure VK.
     ///
     /// The auditor separately (off-chain) recomputes `discloseHash` from the
-    /// disclosed cleartext (including the domain tag 1) and `auditorTag` from
-    /// their viewing key (including domain tag 2). In v1 this checks the
-    /// disclosed context is the one hashed into the receipt; it does not prove
-    /// recipient or purpose were committed at deposit time.
+    /// disclosed cleartext and `auditorTag` from their viewing key. In v1 this
+    /// checks the disclosed context is the one hashed into the receipt; it does
+    /// not prove recipient or purpose were committed at deposit time.
     ///
     /// PRIVACY: invoking this on-chain publishes the nullifierHash<->commitment
     /// link to everyone. For a single regulator prefer the off-chain check;

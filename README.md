@@ -124,8 +124,11 @@ It proves:
 
 - `nullifierHash = Poseidon255(nullifier)`.
 - `commitment = Poseidon255(value, label, Poseidon255(nullifier, secret))`.
-- `discloseHash = Poseidon255(recipientId, purpose, value)`.
-- `auditorTag = Poseidon255(viewingKey, nullifierHash)`.
+- `discloseHash = Poseidon255(1, recipientId, purpose, value)` (domain tag `1`).
+- `auditorTag = Poseidon255(2, viewingKey, nullifierHash)` (domain tag `2`).
+
+The domain tags (`1` for disclose, `2` for auditor) are stable constants that
+prevent hash confusion across circuits or product contexts (see issue #4).
 
 `verify_disclosure` additionally checks:
 

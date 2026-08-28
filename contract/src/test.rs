@@ -362,21 +362,23 @@ fn test_set_disclosure_vk_admin_sets_flag() {
     assert_eq!(client.has_disclosure_vk(), false);
 
     env.mock_all_auths();
-    client.set_disclosure_vk(&admin, &init_vk(&env));
+    let result = client.set_disclosure_vk(&admin, &init_vk(&env));
+    assert_eq!(result, vec![&env, String::from_str(&env, SUCCESS_DISCLOSURE_VK_SET)]);
 
     assert_eq!(client.has_disclosure_vk(), true);
 }
 
 #[test]
-#[should_panic(expected = "only admin can set disclosure vk")]
-fn test_set_disclosure_vk_non_admin_panics() {
+fn test_set_disclosure_vk_non_admin_returns_error() {
     let env = Env::default();
     let (_token_id, contract_id, _admin) = setup_test_environment(&env);
     let client = PrivacyPoolsContractClient::new(&env, &contract_id);
     let non_admin = Address::generate(&env);
 
     env.mock_all_auths();
-    client.set_disclosure_vk(&non_admin, &init_vk(&env));
+    let result = client.set_disclosure_vk(&non_admin, &init_vk(&env));
+    assert_eq!(result, vec![&env, String::from_str(&env, ERROR_ONLY_DISCLOSURE_VK_ADMIN)]);
+    assert_eq!(client.has_disclosure_vk(), false);
 }
 
 #[test]
@@ -728,7 +730,6 @@ fn test_contract_initialization() {
 }
 
 #[test]
-#[should_panic(expected = "Association root must be set before withdrawal")]
 fn test_withdraw_without_association_set() {
     let env = Env::default();
     let (token_id, contract_id, _admin) = setup_test_environment(&env);
@@ -780,12 +781,13 @@ fn test_withdraw_without_association_set() {
     assert_eq!(client.get_nullifiers().len(), 0); // No nullifiers should be stored
 
     // Test withdraw with no association set configured
-    // Since association root is now required, withdrawal should panic
+    // Since association root is now required, withdrawal should return error
     let proof = init_proof(&env);
     let pub_signals = init_pub_signals(&env);
 
     env.mock_all_auths();
-    client.withdraw(&bob, &proof, &pub_signals);
+    let result = client.withdraw(&bob, &proof, &pub_signals);
+    assert_eq!(result, vec![&env, String::from_str(&env, ERROR_ASSOCIATION_ROOT_NOT_SET)]);
 }
 
 #[test]
@@ -917,7 +919,6 @@ fn test_set_association_root_non_admin() {
 }
 
 #[test]
-#[should_panic(expected = "Association root must be set before withdrawal")]
 fn test_withdraw_requires_association_root() {
     let env = Env::default();
     let (token_id, contract_id, _admin) = setup_test_environment(&env);
@@ -959,12 +960,13 @@ fn test_withdraw_requires_association_root() {
     assert_eq!(token_client.balance(&contract_id), 1000000000); // Contract should have tokens
     assert_eq!(client.get_nullifiers().len(), 0); // No nullifiers should be stored
 
-    // Attempt to withdraw without setting association root - this should panic
+    // Attempt to withdraw without setting association root - should return error
     let proof = init_proof(&env);
     let pub_signals = init_pub_signals(&env);
 
     env.mock_all_auths();
-    client.withdraw(&bob, &proof, &pub_signals);
+    let result = client.withdraw(&bob, &proof, &pub_signals);
+    assert_eq!(result, vec![&env, String::from_str(&env, ERROR_ASSOCIATION_ROOT_NOT_SET)]);
 }
 
 // ---------------------------------------------------------------------------

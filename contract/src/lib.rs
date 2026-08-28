@@ -37,7 +37,10 @@ pub const ERROR_INSUFFICIENT_BALANCE: &str = "Insufficient balance";
 pub const ERROR_COIN_OWNERSHIP_PROOF: &str = "Couldn't verify coin ownership proof";
 pub const ERROR_WITHDRAW_SUCCESS: &str = "Withdrawal successful";
 pub const ERROR_ONLY_ADMIN: &str = "Only the admin can set association root";
+pub const ERROR_ONLY_DISCLOSURE_VK_ADMIN: &str = "Only the admin can set disclosure vk";
+pub const ERROR_ASSOCIATION_ROOT_NOT_SET: &str = "Association root must be set before withdrawal";
 pub const SUCCESS_ASSOCIATION_ROOT_SET: &str = "Association root set successfully";
+pub const SUCCESS_DISCLOSURE_VK_SET: &str = "Disclosure VK set successfully";
 
 const TREE_DEPTH: u32 = 20;
 
@@ -200,7 +203,7 @@ impl PrivacyPoolsContract {
 
         // Require association root to be set before any withdrawal
         if !Self::has_association_set(env) {
-            panic!("Association root must be set before withdrawal");
+            return vec![env, String::from_str(env, ERROR_ASSOCIATION_ROOT_NOT_SET)];
         }
 
         // Get the stored token address

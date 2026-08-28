@@ -17,7 +17,7 @@
 //!   They prevent hash confusion if future circuits or product contexts add
 //!   new Poseidon invocations over the same field elements.
 
-use soroban_sdk::{contractimpl, symbol_short, vec, Address, Bytes, BytesN, Env, Symbol, Vec};
+use soroban_sdk::{contractimpl, symbol_short, vec, Address, Bytes, BytesN, Env, String, Symbol, Vec};
 
 use lean_imt::TREE_LEAVES_KEY;
 use zk::{Groth16Verifier, Proof, PublicSignals, VerificationKey};
@@ -40,13 +40,18 @@ impl PrivacyPoolsContract {
     /// Admin installs the verification key for the selective-disclosure circuit.
     /// Kept separate from `__constructor` so the existing deploy script is
     /// unchanged; call once after deploy.
-    pub fn set_disclosure_vk(env: &Env, caller: Address, dvk_bytes: Bytes) {
+    ///
+    /// Returns a vector containing status messages:
+    /// * `["Disclosure VK set successfully"]` on success
+    /// * `["Only the admin can set disclosure vk"]` if the caller is not the admin
+    pub fn set_disclosure_vk(env: &Env, caller: Address, dvk_bytes: Bytes) -> Vec<String> {
         caller.require_auth();
         let admin: Address = env.storage().instance().get(&ADMIN_KEY).unwrap();
         if caller != admin {
-            panic!("only admin can set disclosure vk");
+            return vec![env, String::from_str(env, crate::ERROR_ONLY_DISCLOSURE_VK_ADMIN)];
         }
         env.storage().instance().set(&DVK_KEY, &dvk_bytes);
+        vec![env, String::from_str(env, crate::SUCCESS_DISCLOSURE_VK_SET)]
     }
 
     /// Whether a disclosure verification key has been installed.

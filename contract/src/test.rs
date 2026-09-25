@@ -9,6 +9,15 @@ use soroban_sdk::{
     symbol_short, vec, Address, Bytes, BytesN, Env, String, U256,
 };
 
+const DISCLOSURE_VK_HEX: &str = include_str!("../tests/fixtures/disclosure_vk.hex");
+const DISCLOSURE_PROOF_HEX: &str = include_str!("../tests/fixtures/disclosure_proof.hex");
+const DISCLOSURE_PUBLIC_SIGNALS_HEX: &str =
+    include_str!("../tests/fixtures/disclosure_public_signals.hex");
+const DISCLOSURE_RECIPIENT_TAMPERED_HEX: &str =
+    include_str!("../tests/fixtures/disclosure_recipient_tampered.hex");
+const DISCLOSURE_PURPOSE_TAMPERED_HEX: &str =
+    include_str!("../tests/fixtures/disclosure_purpose_tampered.hex");
+
 // Mock token contract for testing
 #[contract]
 pub struct MockToken;
@@ -216,6 +225,58 @@ fn init_pub_signals(env: &Env) -> Bytes {
     };
 
     return pub_signals.to_bytes(env);
+}
+
+fn bytes_from_hex(env: &Env, encoded: &str) -> Bytes {
+    let decoded = hex::decode(encoded.trim()).unwrap();
+    Bytes::from_slice(env, &decoded)
+}
+
+fn disclosure_fixture_vk(env: &Env) -> Bytes {
+    bytes_from_hex(env, DISCLOSURE_VK_HEX)
+}
+
+fn disclosure_fixture_proof(env: &Env) -> Bytes {
+    bytes_from_hex(env, DISCLOSURE_PROOF_HEX)
+}
+
+fn disclosure_fixture_public_signals(env: &Env) -> Bytes {
+    bytes_from_hex(env, DISCLOSURE_PUBLIC_SIGNALS_HEX)
+}
+
+fn prepare_disclosure_fixture(
+    env: &Env,
+    token_id: &Address,
+    contract_id: &Address,
+    admin: &Address,
+    mark_nullifier_spent: bool,
+) -> (Bytes, Bytes, BytesN<32>) {
+    let client = PrivacyPoolsContractClient::new(env, contract_id);
+    let token_client = MockTokenClient::new(env, token_id);
+    let depositor = Address::generate(env);
+
+    env.mock_all_auths();
+    client.set_disclosure_vk(admin, &disclosure_fixture_vk(env));
+    token_client.mint(&depositor, &FIXED_AMOUNT);
+
+    let proof = disclosure_fixture_proof(env);
+    let public_signals = disclosure_fixture_public_signals(env);
+    let parsed_signals = PublicSignals::from_bytes(env, &public_signals).unwrap();
+    let nullifier_hash = parsed_signals.pub_signals.get(0).unwrap().to_bytes();
+    let commitment = parsed_signals.pub_signals.get(1).unwrap().to_bytes();
+
+    assert_eq!(client.deposit(&depositor, &commitment), 0);
+
+    // Isolate verify_disclosure from a full withdrawal flow. Its first state
+    // gate is whether this nullifier has already been spent.
+    if mark_nullifier_spent {
+        let spent_nullifiers = vec![env, nullifier_hash];
+        env.as_contract(contract_id, || {
+            env.storage().instance().set(&NULL_KEY, &spent_nullifiers);
+        });
+    }
+
+    (proof, public_signals, commitment)
 }
 
 fn init_malformed_disclosure_pub_signals(env: &Env) -> Bytes {
@@ -980,7 +1041,10 @@ const AUDITOR_DOMAIN: u32 = 2;
 #[test]
 fn test_domain_constants_are_distinct_and_stable() {
     // The two domain tags must be different to prevent hash confusion.
-    assert_ne!(DISCLOSE_DOMAIN, AUDITOR_DOMAIN, "domain tags must be distinct");
+    assert_ne!(
+        DISCLOSE_DOMAIN, AUDITOR_DOMAIN,
+        "domain tags must be distinct"
+    );
 
     // Both must be positive to avoid degenerate Poseidon inputs.
     assert!(DISCLOSE_DOMAIN > 0, "DISCLOSE_DOMAIN must be > 0");
@@ -1015,7 +1079,10 @@ fn test_disclosure_public_signal_count_is_four() {
                 Fr::from_u256(U256::from_u32(&env, 400)),
             ],
         );
-        PublicSignals { pub_signals: output }.to_bytes(&env)
+        PublicSignals {
+            pub_signals: output,
+        }
+        .to_bytes(&env)
     };
 
     // Wrong count: 3 signals (old malformed vector)
@@ -1033,7 +1100,10 @@ fn test_disclosure_public_signal_count_is_four() {
                 Fr::from_u256(U256::from_u32(&env, 500)),
             ],
         );
-        PublicSignals { pub_signals: output }.to_bytes(&env)
+        PublicSignals {
+            pub_signals: output,
+        }
+        .to_bytes(&env)
     };
 
     let proof = init_proof(&env);
@@ -1070,4 +1140,87 @@ fn test_domain_separation_documentation() {
     assert_eq!(DISCLOSE_DOMAIN, 1, "discloseHash domain tag");
     assert_eq!(AUDITOR_DOMAIN, 2, "auditorTag domain tag");
     assert_ne!(DISCLOSE_DOMAIN, AUDITOR_DOMAIN);
+}
+
+#[test]
+fn test_verify_disclosure_success() {
+    let env = Env::default();
+    let (token_id, contract_id, admin) = setup_test_environment(&env);
+    let client = PrivacyPoolsContractClient::new(&env, &contract_id);
+    let (proof, public_signals, commitment) =
+        prepare_disclosure_fixture(&env, &token_id, &contract_id, &admin, true);
+
+    assert_eq!(client.get_commitments().len(), 1);
+    assert_eq!(client.get_commitments().get(0).unwrap(), commitment);
+    assert_eq!(client.get_nullifiers().len(), 1);
+    assert!(client.verify_disclosure(&proof, &public_signals));
+}
+
+#[test]
+fn test_verify_disclosure_rejects_tampered_recipient_id() {
+    let env = Env::default();
+    let (token_id, contract_id, admin) = setup_test_environment(&env);
+    let client = PrivacyPoolsContractClient::new(&env, &contract_id);
+    let (proof, public_signals, _) =
+        prepare_disclosure_fixture(&env, &token_id, &contract_id, &admin, true);
+
+    // These signals were derived by changing recipientId from 11111 to 11112.
+    // The nullifier, commitment, and auditor tag remain unchanged.
+    let tampered_signals = bytes_from_hex(&env, DISCLOSURE_RECIPIENT_TAMPERED_HEX);
+    let original = PublicSignals::from_bytes(&env, &public_signals).unwrap();
+    let tampered = PublicSignals::from_bytes(&env, &tampered_signals).unwrap();
+    assert_eq!(tampered.pub_signals.get(0), original.pub_signals.get(0));
+    assert_eq!(tampered.pub_signals.get(1), original.pub_signals.get(1));
+    assert_ne!(tampered.pub_signals.get(2), original.pub_signals.get(2));
+    assert_eq!(tampered.pub_signals.get(3), original.pub_signals.get(3));
+
+    assert!(!client.verify_disclosure(&proof, &tampered_signals));
+}
+
+#[test]
+fn test_verify_disclosure_rejects_tampered_purpose() {
+    let env = Env::default();
+    let (token_id, contract_id, admin) = setup_test_environment(&env);
+    let client = PrivacyPoolsContractClient::new(&env, &contract_id);
+    let (proof, public_signals, _) =
+        prepare_disclosure_fixture(&env, &token_id, &contract_id, &admin, true);
+
+    // These signals were derived by changing purpose from 7 to 8. The
+    // nullifier, commitment, and auditor tag remain unchanged.
+    let tampered_signals = bytes_from_hex(&env, DISCLOSURE_PURPOSE_TAMPERED_HEX);
+    let original = PublicSignals::from_bytes(&env, &public_signals).unwrap();
+    let tampered = PublicSignals::from_bytes(&env, &tampered_signals).unwrap();
+    assert_eq!(tampered.pub_signals.get(0), original.pub_signals.get(0));
+    assert_eq!(tampered.pub_signals.get(1), original.pub_signals.get(1));
+    assert_ne!(tampered.pub_signals.get(2), original.pub_signals.get(2));
+    assert_eq!(tampered.pub_signals.get(3), original.pub_signals.get(3));
+
+    assert!(!client.verify_disclosure(&proof, &tampered_signals));
+}
+
+#[test]
+fn test_verify_disclosure_rejects_unspent_nullifier() {
+    let env = Env::default();
+    let (token_id, contract_id, admin) = setup_test_environment(&env);
+    let client = PrivacyPoolsContractClient::new(&env, &contract_id);
+    let token_client = MockTokenClient::new(&env, &token_id);
+    let (proof, public_signals, commitment) =
+        prepare_disclosure_fixture(&env, &token_id, &contract_id, &admin, false);
+
+    let root_before = client.get_merkle_root();
+    let balance_before = token_client.balance(&contract_id);
+    assert_eq!(client.get_commitments().len(), 1);
+    assert_eq!(client.get_commitments().get(0).unwrap(), commitment);
+    assert_eq!(client.get_nullifiers().len(), 0);
+    assert_eq!(balance_before, FIXED_AMOUNT);
+
+    // The proof is valid, but the contract has no spent-nullifier marker.
+    assert!(!client.verify_disclosure(&proof, &public_signals));
+
+    // Verification is read-only and must not settle the nullifier or move funds.
+    assert_eq!(client.get_merkle_root(), root_before);
+    assert_eq!(client.get_commitments().len(), 1);
+    assert_eq!(client.get_commitments().get(0).unwrap(), commitment);
+    assert_eq!(client.get_nullifiers().len(), 0);
+    assert_eq!(token_client.balance(&contract_id), balance_before);
 }
